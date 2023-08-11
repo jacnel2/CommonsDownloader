@@ -9,7 +9,7 @@ import logging
 
 
 DEFAULT_WIDTH = 100
-
+FULL_SIZE_WIDTH = -1
 
 class DownloadException(Exception):
 
@@ -46,7 +46,7 @@ def clean_up_filename(file_name):
 
 def make_thumb_url(image_name, width):
     """Return the URL to the thumbnail of the file, at the given width."""
-    base_url = "http://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=%s&width=%s"
+    base_url = "http://commons.wikimedia.org/w/thumb.php?f=%s&width=%s"
     return base_url % (urllib2.quote(image_name), width)
 
 
@@ -57,6 +57,11 @@ def make_full_size_url(image_name):
 
 
 def clean_extension(extension):
+    """Return a cleaned-up extension"""
+    clean_extension = clean_extension_jpeg(extension)
+    return clean_extension.replace("+xml", "")
+
+def clean_extension_jpeg(extension):
     """Return a cleaned-up extension - only applies for JPEG."""
     extension_converter = {'jpeg': 'jpg'}
     return extension_converter.get(extension, extension)
@@ -78,7 +83,7 @@ def get_thumbnail_of_file(image_name, width):
         opened = urllib2.urlopen(req)
         extension = opened.headers.subtype
         return opened.read(), make_thumbnail_name(image_name, extension)
-    except urllib2.HTTPError, e:
+    except urllib2.HTTPError as e:
         message = e.fp.read()
         raise get_exception_based_on_api_message(message, image_name)
 
@@ -93,7 +98,7 @@ def get_full_size_file(image_name):
         opened = urllib2.urlopen(req)
         extension = opened.headers.subtype
         return opened.read(), make_thumbnail_name(image_name, extension)
-    except urllib2.HTTPError, e:
+    except urllib2.HTTPError as e:
         message = e.fp.read()
         raise get_exception_based_on_api_message(message, image_name)
 
@@ -102,7 +107,7 @@ def get_exception_based_on_api_message(message, image_name=""):
     """Return the exception matching the given API error message."""
     msg_bigger_than_source = re.compile('Image was not scaled, is the requested width bigger than the source?')
     msg_does_not_exist = re.compile('The source file .* does not exist')
-    msg_does_not_exist_bis = re.compile("Value not found")
+    msg_does_not_exist_bis = re.compile('<div class="error"><p>Value not found')
     if re.search(msg_bigger_than_source, message):
         msg = "File %s requested at a width bigger than source" % image_name
         return RequestedWidthBiggerThanSourceException(msg)
@@ -119,9 +124,13 @@ def get_exception_based_on_api_message(message, image_name=""):
 def download_file(image_name, output_path, width=DEFAULT_WIDTH):
     """Download a given Wikimedia Commons file."""
     image_name = clean_up_filename(image_name)
-    logging.info("Downloading %s with width %s", image_name, width)
     try:
-        contents, output_file_name = get_thumbnail_of_file(image_name, width)
+        if width == FULL_SIZE_WIDTH:
+            logging.info("Downloading %s as full size", image_name)
+            contents, output_file_name = get_full_size_file(image_name)
+        else:
+            logging.info("Downloading %s with width %s", image_name, width)
+            contents, output_file_name = get_thumbnail_of_file(image_name, width)
     except RequestedWidthBiggerThanSourceException:
         logging.warning("Requested width is bigger than source - downloading full size")
         contents, output_file_name = get_full_size_file(image_name)
@@ -131,12 +140,12 @@ def download_file(image_name, output_path, width=DEFAULT_WIDTH):
             logging.debug("Writing as %s", output_file_path)
             f.write(contents)
         return output_file_path
-    except IOError, e:
+    except IOError as e:
         msg = 'Could not write file %s on disk to %s: %s' % \
               (image_name, output_path, e.message)
         logging.error(msg)
         raise CouldNotWriteFileOnDiskException(msg)
-    except Exception, e:
+    except Exception as e:
         logging.critical(e.message)
         msg = 'An unexpected error occured when downloading %s to %s: %s' % \
               (image_name, output_path, e.message)

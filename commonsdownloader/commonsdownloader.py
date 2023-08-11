@@ -11,9 +11,14 @@ sys.setdefaultencoding("utf-8")
 import os
 import logging
 import argparse
-from thumbnaildownload import download_file, DownloadException
+from thumbnaildownload import download_file, DownloadException, FULL_SIZE_WIDTH
 from itertools import izip_longest
 
+def get_file_width(arg_width, arg_full_size):
+    if (arg_full_size):
+        return FULL_SIZE_WIDTH
+    else:
+        return arg_width
 
 def get_category_files_from_api(category_name):
     """Yield the file names of a category by querying the MediaWiki API."""
@@ -24,11 +29,11 @@ def get_category_files_from_api(category_name):
             for x in category.members(namespace=6))
 
 
-def download_from_category(category_name, output_path, width):
+def download_from_category(category_name, output_path, width, full_size):
     """Download files of a given category."""
     file_names = get_category_files_from_api(category_name)
-    files_to_download = izip_longest(file_names, [], fillvalue=width)
-    download_files_if_not_in_manifest(files_to_download, output_path)
+    files_to_download = izip_longest(file_names, [], fillvalue=get_file_width(width, full_size))
+    download_files_if_not_in_cache(files_to_download, output_path)
 
 
 def get_files_from_textfile(textfile_handler):
@@ -47,7 +52,7 @@ def get_files_from_textfile(textfile_handler):
 def download_from_file_list(file_list, output_path):
     """Download files from a given textfile list."""
     files_to_download = get_files_from_textfile(file_list)
-    download_files_if_not_in_manifest(files_to_download, output_path)
+    download_files_if_not_in_cache(files_to_download, output_path)
 
 
 def get_files_from_arguments(files, width):
@@ -55,54 +60,54 @@ def get_files_from_arguments(files, width):
     return izip_longest(files, [], fillvalue=width)
 
 
-def download_from_files(files, output_path, width):
+def download_from_files(files, output_path, width, full_size):
     """Download files from a given file list."""
-    files_to_download = get_files_from_arguments(files, width)
-    download_files_if_not_in_manifest(files_to_download, output_path)
+    files_to_download = get_files_from_arguments(files, get_file_width(width, full_size))
+    download_files_if_not_in_cache(files_to_download, output_path)
 
 
-def get_local_manifest_path(output_path):
-    """Return the path to the local downloading manifest."""
-    return os.path.join(output_path, '.manifest')
+def get_local_cache_path(output_path):
+    """Return the path to the local downloading cache."""
+    return os.path.join(output_path, '.cache')
 
 
-def read_local_manifest(output_path):
-    """Return the contents of the local manifest, as a dictionary."""
-    local_manifest_path = get_local_manifest_path(output_path)
+def read_local_cache(output_path):
+    """Return the contents of the local cache, as a dictionary."""
+    local_cache_path = get_local_cache_path(output_path)
     try:
-        with open(local_manifest_path, 'r') as f:
-            manifest = dict(get_files_from_textfile(f))
-            logging.debug('Retrieving %s elements from manifest', len(manifest))
-            return manifest
+        with open(local_cache_path, 'r') as f:
+            cache = dict(get_files_from_textfile(f))
+            logging.debug('Retrieving %s elements from cache', len(cache))
+            return cache
     except IOError:
-        logging.debug('No local manifest at %s', local_manifest_path)
+        logging.debug('No local cache at %s', local_cache_path)
         return {}
 
 
-def is_file_in_manifest(file_name, width, manifest):
-    """Whether the given file, in its given width, is in manifest."""
-    return (manifest.get(file_name, '-1') == width)
+def is_file_in_cache(file_name, width, cache):
+    """Whether the given file, in its given width, is in cache."""
+    return (cache.get(file_name, '-1') == width)
 
 
-def write_file_to_manifest(file_name, width, manifest_fh):
-    """Write the given file in manifest."""
-    manifest_fh.write("%s,%s\n" % (file_name, str(width)))
-    logging.debug("Wrote file %s to manifest", file_name)
+def write_file_to_cache(file_name, width, cache_fh):
+    """Write the given file on cache."""
+    cache_fh.write("%s,%s\n" % (file_name, str(width)))
+    logging.debug("Wrote file %s to cache", file_name)
 
 
-def download_files_if_not_in_manifest(files_iterator, output_path):
-    """Download the given files to the given path, unless in manifest."""
-    local_manifest = read_local_manifest(output_path)
-    with open(get_local_manifest_path(output_path), 'a') as manifest_fh:
+def download_files_if_not_in_cache(files_iterator, output_path):
+    """Download the given files to the given path, unless in cache."""
+    local_cache = read_local_cache(output_path)
+    with open(get_local_cache_path(output_path), 'a') as cache_fh:
         for (file_name, width) in files_iterator:
-            if is_file_in_manifest(file_name, width, local_manifest):
+            if is_file_in_cache(file_name, width, local_cache):
                 logging.info('Skipping file %s', file_name)
                 continue
             try:
                 download_file(file_name, output_path, width=width)
-                write_file_to_manifest(file_name, width, manifest_fh)
-            except DownloadException, e:
-                logging.error("Could not download %s: %s", file_name, e.message)
+                write_file_to_cache(file_name, width, cache_fh)
+            except DownloadException as e:
+                logging.error("Could not download %s: %s", file_name, e)
 
 
 class Folder(argparse.Action):
@@ -141,11 +146,17 @@ def main():
                         action=Folder,
                         default=os.getcwd(),
                         help='The directory to download the files to')
-    parser.add_argument("-w", "--width",
+    width_group = parser.add_mutually_exclusive_group()
+    width_group.add_argument("-w", "--width",
                         dest="width",
                         type=int,
                         default=100,
                         help='The width of the thumbnail (default: 100)')
+    width_group.add_argument("--full_size",
+                        action="store_true",
+                        dest="full_size",
+                        help="Download full size, original image, for all images"
+                        )
     verbosity_group = parser.add_mutually_exclusive_group()
     verbosity_group.add_argument("-v",
                                  action="count",
@@ -168,9 +179,9 @@ def main():
     if args.file_list:
         download_from_file_list(args.file_list, args.output_path)
     elif args.category_name:
-        download_from_category(args.category_name, args.output_path, args.width)
+        download_from_category(args.category_name, args.output_path, args.width, args.full_size)
     elif args.files:
-        download_from_files(args.files, args.output_path, args.width)
+        download_from_files(args.files, args.output_path, args.width, args.full_size)
     else:
         parser.print_help()
 
